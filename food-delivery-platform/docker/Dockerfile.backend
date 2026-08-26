@@ -1,0 +1,64 @@
+# =============================================================
+# Dockerfile.backend - AI-Powered Food Delivery Platform
+# -------------------------------------------------------------
+# Multi-stage build for the Node.js / Express API.
+#
+# Stage 1 (deps):   install production + build dependencies
+# Stage 2 (build):  compile / prepare assets (if any)
+# Stage 3 (runtime): minimal Node 18 Alpine image with only
+#                    production dependencies.
+#
+# Build:
+#   docker build -f docker/Dockerfile.backend -t fdp-backend:latest .
+# =============================================================
+
+# ---------------- Stage 1: dependencies ----------------
+FROM node:18-alpine AS deps
+WORKDIR /app
+
+# Install dependencies based on the lockfile for reproducible builds.
+COPY backend/package.json backend/package-lock.json* ./
+RUN npm ci --omit=dev --ignore-scripts || npm install --omit=dev --ignore-scripts
+
+# ---------------- Stage 2: build ----------------
+FROM node:18-alpine AS build
+WORKDIR /app
+
+# Tooling needed for native modules / build steps.
+RUN apk add --no-cache python3 make g++
+
+COPY backend/package.json backend/package-lock.json* ./
+RUN npm ci || npm install
+
+COPY backend/ ./
+# Example build step: transpile TypeScript or generate assets.
+# Uncomment if the project uses a build script.
+# RUN npm run build
+
+# ---------------- Stage 3: runtime ----------------
+FROM node:18-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+
+# tini: proper PID 1 init to reap zombie processes.
+RUN apk add --no-cache tini curl \
+    && addgroup -S nodejs \
+    && adduser -S nodejs -G nodejs
+
+# Copy production dependencies from the deps stage.
+COPY --from=deps /app/node_modules ./node_modules
+# Copy application source / build output from the build stage.
+COPY --from=build /app/ ./
+
+# Drop privileges for security.
+USER nodejs
+
+EXPOSE 5000
+
+# Healthcheck hit by Docker / orchestrators.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://localhost:5000/health || exit 1
+
+# Graceful shutdown handled by the app; tini forwards signals.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "server.js"]

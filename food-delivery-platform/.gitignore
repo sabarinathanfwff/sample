@@ -1,0 +1,61 @@
+# =============================================================
+# .gitignore - AI-Powered Food Delivery Platform
+# =============================================================
+
+# ---------------- Dependencies ----------------
+node_modules/
+.pnp/
+.pnp.js
+backend/node_modules/
+frontend/node_modules/
+
+# ---------------- Build artifacts ----------------
+dist/
+build/
+out/
+.next/
+coverage/
+*.tsbuildinfo
+backend/dist/
+frontend/dist/
+frontend/build/
+
+# ---------------- Environment files ----------------
+.env
+.env.*
+!.env.example
+docker/.env
+docker/.env.*
+!docker/.env.example
+backend/.env
+frontend/.env
+
+# ---------------- Docker ----------------
+.dockerignore
+docker-compose.override.yml
+
+# ---------------- Logs ----------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+backend/logs/
+/var/log/*.log
+
+# ---------------- OS / Editor ----------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ---------------- Runtime data ----------------
+*.pid
+*.seed
+.cache/
+.eslintcache
+
+# ---------------- Local DB dumps ----------------
+*.sql.gz
+db-backups/

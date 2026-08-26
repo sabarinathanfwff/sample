@@ -1,0 +1,143 @@
+.restaurant-page {
+  padding-bottom: 40px;
+}
+
+.restaurant-hero {
+  position: relative;
+  height: 300px;
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: flex-end;
+}
+
+.restaurant-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(transparent 30%, rgba(0, 0, 0, 0.8));
+}
+
+.restaurant-hero-content {
+  position: relative;
+  z-index: 1;
+  padding: 24px;
+  color: var(--white);
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.restaurant-name {
+  font-size: 32px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.restaurant-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 14px;
+}
+
+.restaurant-meta span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.restaurant-info {
+  display: grid;
+  grid-template-columns: 1fr 350px;
+  gap: 32px;
+  padding: 32px 0;
+}
+
+.menu-section {
+  padding: 0 16px;
+}
+
+.menu-category {
+  margin-bottom: 32px;
+}
+
+.menu-category-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--gray-200);
+}
+
+.menu-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.cart-sidebar {
+  position: sticky;
+  top: 92px;
+}
+
+.cart-summary-card {
+  background: var(--white);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.cart-summary-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+
+.cart-summary-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.cart-summary-total {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 2px solid var(--gray-200);
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.reviews-section {
+  margin-top: 40px;
+  padding: 24px;
+  background: var(--white);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+}
+
+@media (max-width: 768px) {
+  .restaurant-hero {
+    height: 200px;
+  }
+  .restaurant-name {
+    font-size: 24px;
+  }
+  .restaurant-info {
+    grid-template-columns: 1fr;
+  }
+  .cart-sidebar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    z-index: 100;
+  }
+  .cart-summary-card {
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+}

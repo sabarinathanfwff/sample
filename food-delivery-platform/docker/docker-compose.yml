@@ -1,0 +1,146 @@
+# =============================================================
+# AI-Powered Food Delivery Platform - Docker Compose
+# -------------------------------------------------------------
+# Brings up the full stack for local development / staging:
+#   - postgres : PostgreSQL 14 (primary datastore)
+#   - redis    : Redis 7 (cache / session / queue broker)
+#   - backend  : Node.js / Express API (port 5000)
+#   - frontend : React SPA served via Nginx (port 3000)
+#
+# Usage:
+#   docker compose --env-file docker/.env.example up --build
+#   docker compose up -d
+#   docker compose down -v          # remove volumes too
+#
+# Health checks are configured for every service so that
+# `depends_on: condition: service_healthy` works correctly.
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # PostgreSQL 14 - primary relational database
+  # -----------------------------------------------------------
+  postgres:
+    image: postgres:14-alpine
+    container_name: fdp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-food_delivery}
+      POSTGRES_USER: ${POSTGRES_USER:-food_delivery_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
+      # Tune for small/medium workloads; adjust for production.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Seed the schema automatically on first boot.
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - fdp-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-food_delivery_app} -d ${POSTGRES_DB:-food_delivery}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # Redis 7 - optional cache / session store / queue broker
+  # -----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: fdp-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - fdp-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # -----------------------------------------------------------
+  # Backend - Node.js / Express API
+  # -----------------------------------------------------------
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: fdp-backend
+    restart: unless-stopped
+    env_file:
+      - docker/.env.example
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 5000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-food_delivery_app}:${POSTGRES_PASSWORD:-changeme_strong_password}@postgres:5432/${POSTGRES_DB:-food_delivery}
+      REDIS_URL: redis://redis:6379
+      # Override host name so the container can reach postgres/redis.
+      DB_HOST: postgres
+      REDIS_HOST: redis
+    ports:
+      - "5000:5000"
+    volumes:
+      # Mount source for hot-reload during development only.
+      - ./../backend:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fdp-network
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:5000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # Frontend - React SPA served through Nginx (Alpine)
+  # -----------------------------------------------------------
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        # Forward the API URL so the SPA build knows where to call.
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:5000/api}
+    container_name: fdp-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - fdp-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+# =============================================================
+# Networks & Volumes
+# =============================================================
+networks:
+  fdp-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local

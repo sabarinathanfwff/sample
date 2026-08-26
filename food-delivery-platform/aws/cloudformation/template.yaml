@@ -1,0 +1,532 @@
+# =============================================================
+# AI-Powered Food Delivery Platform - AWS CloudFormation Template
+# -------------------------------------------------------------
+# Provisions a complete, production-ready infrastructure:
+#
+#   Networking : VPC, 2 public subnets (multi-AZ), Internet
+#                Gateway, route table, security groups.
+#   Compute    : EC2 t3.micro running backend + frontend (Docker).
+#   Database   : RDS PostgreSQL db.t3.micro (multi-AZ optional).
+#   Storage    : S3 bucket for restaurant / food images.
+#   IAM        : Instance role with S3 + CloudWatch access.
+#   Observability: CloudWatch Log groups, metric filters, alarms.
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name food-delivery-platform \
+#     --template-body file://aws/cloudformation/template.yaml \
+#     --capabilities CAPABILITY_IAM \
+#     --parameters ParameterKey=KeyName,ParameterValue=my-key \
+#                  ParameterKey=DBPassword,ParameterValue='<secret>'
+# =============================================================
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Infrastructure for the AI-Powered Food Delivery Platform"
+
+# -------------------------------------------------------------
+# Parameters
+# -------------------------------------------------------------
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [development, staging, production]
+    Description: Deployment environment name (used for tagging & naming).
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair for SSH access to the instance.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+    Description: EC2 instance type for backend/frontend hosting.
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium]
+    Description: RDS PostgreSQL instance class.
+
+  DBUsername:
+    Type: String
+    Default: food_delivery_app
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9_]*"
+    Description: Master username for the RDS PostgreSQL instance.
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 128
+    Description: Master password for the RDS PostgreSQL instance.
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+    Description: Allocated storage for RDS in GiB.
+
+  MultiAZDatabase:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Deploy the RDS instance in a Multi-AZ configuration.
+
+  SSHLocation:
+    Type: String
+    Default: "0.0.0.0/0"
+    AllowedPattern: "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+    Description: CIDR block allowed to SSH (port 22) into the instance. Restrict in production.
+
+  ImageBucketName:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional explicit name for the image S3 bucket. Leave empty to
+      auto-generate a globally unique name.
+
+# -------------------------------------------------------------
+# Mappings
+# -------------------------------------------------------------
+Mappings:
+  # Amazon Linux 2 AMI (x86_64) - update the AMI per region if needed.
+  RegionMap:
+    us-east-1:
+      AMI: ami-0c94855ba95c71c99
+    us-east-2:
+      AMI: ami-0d7a1099c3a7c1c5b
+    us-west-1:
+      AMI: ami-0bdb828fd58c52235
+    us-west-2:
+      AMI: ami-0a63f6e6958878fe4
+    eu-west-1:
+      AMI: ami-0d64bb532e0502c46
+    ap-southeast-1:
+      AMI: ami-0f436760fa30ce338
+
+# -------------------------------------------------------------
+# Resources
+# -------------------------------------------------------------
+Resources:
+
+  # ---------------- VPC ----------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-vpc"
+
+  # ---------------- Internet Gateway ----------------
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-igw"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ---------------- Public Subnets (2 AZs) ----------------
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-public-subnet-1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-public-subnet-2"
+
+  # ---------------- Route Table ----------------
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-public-rt"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ---------------- Security Groups ----------------
+  # EC2 security group: HTTP, HTTPS, SSH.
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP, HTTPS and SSH to the EC2 instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+          Description: SSH (restrict in production)
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-ec2-sg"
+
+  # RDS security group: Postgres only reachable from the EC2 SG.
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL access from EC2 only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+          Description: PostgreSQL from EC2
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-rds-sg"
+
+  # ---------------- S3 Bucket (images) ----------------
+  ImagesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If
+        - HasBucketName
+        - !Ref ImageBucketName
+        - !Sub "${Environment}-fdp-images-${AWS::AccountId}-${AWS::Region}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, PUT, POST]
+            AllowedOrigins: ["*"]
+            MaxAge: 3000
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-images"
+
+  # IAM policy granting read/write to the image bucket only.
+  ImagesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ImagesBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSSLRequestsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ImagesBucket.Arn
+              - !Sub "${ImagesBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # ---------------- IAM Role for EC2 ----------------
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3AndCloudWatchAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Read/write access to the image bucket.
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ImagesBucket.Arn
+                  - !Sub "${ImagesBucket.Arn}/*"
+              # CloudWatch Logs: create streams/groups and push logs.
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: "arn:aws:logs:*:*:*"
+              # CloudWatch metrics & SSM (for agent-based monitoring).
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - ssm:UpdateInstanceInformation
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-ec2-role"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # ---------------- RDS PostgreSQL ----------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for the food delivery database
+      SubnetIds:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-db-subnet-group"
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${Environment}-fdp-postgres"
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: postgres
+      EngineVersion: "14.10"
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp2
+      StorageEncrypted: true
+      MultiAZ: !Ref MultiAZDatabase
+      DBName: food_delivery
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+        - !GetAtt RDSSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      DeleteAutomatedBackups: false
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-postgres"
+
+  # ---------------- EC2 Instance ----------------
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: Database
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      SubnetId: !Ref PublicSubnet1
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          echo "[user-data] Installing Docker and dependencies..."
+          yum update -y
+          amazon-linux-extras enable docker
+          yum install -y docker git awscli jq
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+
+          echo "[user-data] Installing Docker Compose..."
+          curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+            -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+
+          echo "[user-data] Configuring CloudWatch agent..."
+          wget -q https://s3.amazonaws.com/amazoncloudwatch-agent/amazon-linux/amd64/latest/amazon-cloudwatch-agent.rpm
+          rpm -U ./amazon-cloudwatch-agent.rpm || true
+          mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+          aws s3 cp s3://${ImagesBucket}/cloudwatch-config.json \
+            /opt/aws/amazon-cloudwatch-agent/etc/config.json || true
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+            -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json || true
+
+          echo "[user-data] Setup complete."
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-fdp-ec2"
+
+  # ---------------- CloudWatch Logs ----------------
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/ec2/${Environment}-fdp/backend"
+      RetentionInDays: 30
+
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/ec2/${Environment}-fdp/frontend"
+      RetentionInDays: 30
+
+  DatabaseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/rds/${Environment}-fdp/postgres"
+      RetentionInDays: 30
+
+  # ---------------- CloudWatch Alarms ----------------
+  EC2CPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-fdp-ec2-cpu-high"
+      AlarmDescription: "EC2 CPU utilization > 80% for 5 minutes"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref EC2Instance
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  RDSCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-fdp-rds-cpu-high"
+      AlarmDescription: "RDS CPU utilization > 80% for 5 minutes"
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Database
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  RDSFreeStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-fdp-rds-low-storage"
+      AlarmDescription: "RDS free storage space < 5 GB"
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Database
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5368709120
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+
+  # ---------------- Conditions ----------------
+Conditions:
+  HasBucketName: !Not [!Equals [!Ref ImageBucketName, ""]]
+
+# -------------------------------------------------------------
+# Outputs
+# -------------------------------------------------------------
+Outputs:
+  InstancePublicIP:
+    Description: Public IP address of the EC2 instance
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub "${Environment}-FDP-InstanceId"
+
+  InstancePublicDNS:
+    Description: Public DNS name of the EC2 instance
+    Value: !GetAtt EC2Instance.PublicDnsName
+
+  DatabaseEndpoint:
+    Description: RDS PostgreSQL endpoint (host:port)
+    Value: !GetAtt Database.Endpoint.Address
+    Export:
+      Name: !Sub "${Environment}-FDP-DBEndpoint"
+
+  DatabasePort:
+    Description: RDS PostgreSQL port
+    Value: !GetAtt Database.Endpoint.Port
+
+  ImagesBucketName:
+    Description: S3 bucket for restaurant and food images
+    Value: !Ref ImagesBucket
+    Export:
+      Name: !Sub "${Environment}-FDP-ImagesBucket"
+
+  ImagesBucketArn:
+    Description: ARN of the S3 images bucket
+    Value: !GetAtt ImagesBucket.Arn
+
+  ApplicationURL:
+    Description: URL to access the application
+    Value: !Sub "http://${EC2Instance.PublicDnsName}"
