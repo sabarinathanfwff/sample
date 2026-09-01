@@ -1,0 +1,155 @@
+<% var title = student.first_name + ' ' + student.last_name; %>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+  <h1><%= student.first_name %> <%= student.last_name %></h1>
+  <div>
+    <a href="/students/<%= student.id %>/edit" class="btn btn-warning">Edit</a>
+    <form action="/students/<%= student.id %>/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this student?');">
+      <button type="submit" class="btn btn-danger">Delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Student Information</h2>
+  <table>
+    <tr><th>Student ID</th><td><%= student.student_id %></td></tr>
+    <tr><th>Email</th><td><%= student.email || '-' %></td></tr>
+    <tr><th>Phone</th><td><%= student.phone || '-' %></td></tr>
+    <tr><th>Date of Birth</th><td><%= student.date_of_birth || '-' %></td></tr>
+    <tr><th>Enrollment Date</th><td><%= student.enrollment_date %></td></tr>
+    <tr><th>Status</th><td><span class="badge badge-<%= student.status === 'active' ? 'success' : student.status === 'graduated' ? 'info' : 'warning' %>"><%= student.status %></span></td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>GPA Summary</h2>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="number"><%= gpa.gpa %></div>
+      <div class="label">GPA</div>
+    </div>
+    <div class="stat-card">
+      <div class="number"><%= gpa.total_credits %></div>
+      <div class="label">Credits</div>
+    </div>
+    <div class="stat-card">
+      <div class="number"><%= gpa.courses.length %></div>
+      <div class="label">Courses</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Enrolled Courses</h2>
+  <% if (enrollments.length === 0) { %>
+    <p>Not enrolled in any courses.</p>
+  <% } else { %>
+    <table>
+      <thead>
+        <tr>
+          <th>Course</th>
+          <th>Code</th>
+          <th>Credits</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% enrollments.forEach(function(e) { %>
+          <tr>
+            <td><%= e.course_name %></td>
+            <td><%= e.course_code %></td>
+            <td><%= e.credits %></td>
+            <td>
+              <form action="/students/<%= student.id %>/unenroll/<%= e.id %>" method="POST" style="display: inline;">
+                <button type="submit" class="btn btn-sm btn-danger">Unenroll</button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+
+  <h3 style="margin-top: 20px;">Enroll in Course</h3>
+  <form action="/students/<%= student.id %>/enroll" method="POST" style="display: flex; gap: 10px;">
+    <select name="course_id" required style="flex: 1;">
+      <option value="">Select a course...</option>
+      <% allCourses.forEach(function(c) { %>
+        <option value="<%= c.id %>"><%= c.course_code %> - <%= c.course_name %></option>
+      <% }) %>
+    </select>
+    <button type="submit" class="btn btn-success">Enroll</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Grades</h2>
+  <% if (grades.length === 0) { %>
+    <p>No grades recorded.</p>
+  <% } else { %>
+    <table>
+      <thead>
+        <tr>
+          <th>Course</th>
+          <th>Assignment</th>
+          <th>Score</th>
+          <th>Percentage</th>
+          <th>Date</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% grades.forEach(function(g) { %>
+          <tr>
+            <td><%= g.course_code %></td>
+            <td><%= g.assignment_name %></td>
+            <td><%= g.score %> / <%= g.max_score %></td>
+            <td><%= ((g.score / g.max_score) * 100).toFixed(1) %>%</td>
+            <td><%= g.date_recorded %></td>
+            <td>
+              <form action="/grades/<%= g.id %>/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this grade?');">
+                <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+
+  <% if (enrollments.length > 0) { %>
+    <h3 style="margin-top: 20px;">Add Grade</h3>
+    <form action="/grades" method="POST">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="enrollment_id">Course</label>
+          <select id="enrollment_id" name="enrollment_id" required>
+            <option value="">Select enrollment...</option>
+            <% enrollments.forEach(function(e) { %>
+              <option value="<%= e.id %>"><%= e.course_code %> - <%= e.course_name %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="assignment_name">Assignment Name</label>
+          <input type="text" id="assignment_name" name="assignment_name" required>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="score">Score</label>
+          <input type="number" id="score" name="score" step="0.01" min="0" required>
+        </div>
+        <div class="form-group">
+          <label for="max_score">Max Score</label>
+          <input type="number" id="max_score" name="max_score" step="0.01" min="0" value="100">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="weight">Weight</label>
+        <input type="number" id="weight" name="weight" step="0.1" min="0" value="1">
+      </div>
+      <button type="submit" class="btn btn-primary">Add Grade</button>
+    </form>
+  <% } %>
+</div>
